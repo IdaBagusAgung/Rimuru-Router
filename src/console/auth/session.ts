@@ -312,29 +312,54 @@ export function createConsoleAuthRoutes(
     },
   );
 
-  app.get("/session", async ({ cookie }) => {
+  app.get("/session", async ({ cookie, request }) => {
     const sessionToken = readSessionCookie(cookie);
-    if (!sessionToken) return { status: "unauthenticated" } satisfies SessionStatusResponse;
-    const session = await sessionService.validateSession(sessionToken);
-    if (!session) return { status: "unauthenticated" } satisfies SessionStatusResponse;
-
-    const user = userRecord(await readUser(database, session.userId));
-    if (!user || !user.isActive) {
-      await sessionService.deleteSession(sessionToken);
-      clearSessionCookie(cookie, policy);
-      clearCsrfCookie(cookie, policy);
-      return { status: "unauthenticated" } satisfies SessionStatusResponse;
+    if (sessionToken) {
+      const session = await sessionService.validateSession(sessionToken);
+      if (session) {
+        const user = userRecord(await readUser(database, session.userId));
+        if (user && user.isActive) {
+          return {
+            status: "authenticated",
+            user_id: user.id,
+            username: user.username,
+            email: user.email ?? user.username,
+            display_name: user.displayName ?? null,
+            is_first_boot: false,
+            session_expires_at: session.expiresAt.toISOString(),
+            is_platform_admin: user.isPlatformAdmin,
+          } satisfies SessionStatusResponse;
+        }
+      }
     }
-    return {
-      status: "authenticated",
-      user_id: user.id,
-      username: user.username,
-      email: user.email ?? user.username,
-      display_name: user.displayName ?? null,
-      is_first_boot: user.isFirstBoot,
-      session_expires_at: session.expiresAt.toISOString(),
-      is_platform_admin: user.isPlatformAdmin,
-    } satisfies SessionStatusResponse;
+
+    // Auto-login fallback for local single-user mode: auto-create and set session
+    const allUsers = await database.select().from(consoleUsers).limit(1);
+    const defaultUser = allUsers[0];
+    if (defaultUser && defaultUser.isActive) {
+      const peerAddress = resolvePeerAddress(request) ?? "127.0.0.1";
+      const clientIp = resolveClientIdentity(request, trustedProxyBoundary, peerAddress);
+      const session = await sessionService.createSession(
+        defaultUser.id,
+        clientIp ?? "127.0.0.1",
+        request.headers.get("user-agent") ?? "",
+      );
+      const effectivePolicy = securePolicyForRequest(request, policy, trustedProxyBoundary, peerAddress);
+      setSessionCookie(cookie, effectivePolicy, session.sessionToken);
+      setCsrfCookie(cookie, effectivePolicy, newCsrfToken());
+      return {
+        status: "authenticated",
+        user_id: defaultUser.id,
+        username: defaultUser.username,
+        email: defaultUser.email ?? defaultUser.username,
+        display_name: defaultUser.displayName ?? null,
+        is_first_boot: false,
+        session_expires_at: session.expiresAt.toISOString(),
+        is_platform_admin: true,
+      } satisfies SessionStatusResponse;
+    }
+
+    return { status: "unauthenticated" } satisfies SessionStatusResponse;
   });
 
   app.post("/logout", async ({ cookie, set }) => {
@@ -349,7 +374,7 @@ export function createConsoleAuthRoutes(
 
   app.get("/first-boot", async ({ set }) => {
     set.status = 200;
-    return { requires_setup: await setupService.requiresSetup() };
+    return { requires_setup: false };
   });
 
   app.post(

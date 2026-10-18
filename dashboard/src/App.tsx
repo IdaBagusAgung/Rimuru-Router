@@ -27,9 +27,6 @@ function RouteLoadingShell(): ReactNode {
 
 // Route chunks are content-hashed: after a rebuild the previous page's chunk
 // URLs 404. lazyWithRetry reloads once to pick up the fresh index.html, then
-// surfaces to the ErrorBoundary instead of looping.
-const Login = lazyWithRetry(() => import("./features/session/LoginPage"), "login");
-const Setup = lazyWithRetry(() => import("./features/session/SetupPage"), "setup");
 const Banned = lazyWithRetry(() => import("./features/session/BannedPage"), "banned");
 const Overview = lazyWithRetry(() => import("./features/overview/OverviewPage"), "overview");
 const Usage = lazyWithRetry(() => import("./features/usage/UsagePage"), "usage");
@@ -53,7 +50,6 @@ const Studio = lazyWithRetry(() => import("./features/studio/StudioPage"), "stud
  */
 function SessionTransitionBridge(): ReactNode {
   const navigate = useNavigate();
-  const location = useLocation();
   useEffect(() => {
     setSessionTransitionListener((kind) => {
       // The session is unusable: drop every cached tenant view so the next
@@ -63,10 +59,10 @@ function SessionTransitionBridge(): ReactNode {
         navigate("/banned", { replace: true });
         return;
       }
-      navigate(`/login?returnTo=${encodeURIComponent(location.pathname)}`, { replace: true });
+      navigate("/", { replace: true });
     });
     return () => setSessionTransitionListener(undefined);
-  }, [navigate, location.pathname]);
+  }, [navigate]);
   return null;
 }
 
@@ -77,8 +73,8 @@ function RouteErrorBoundary(): ReactNode {
     <ErrorBoundary resetKey={`${location.pathname}${location.search}`}>
       <Suspense fallback={<RouteLoadingShell />}>
         <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/setup" element={<Setup />} />
+          <Route path="/login" element={<Navigate to="/" replace />} />
+          <Route path="/setup" element={<Navigate to="/" replace />} />
           <Route path="/banned" element={<Banned />} />
           <Route path="/*" element={<ProtectedRoutes />} />
         </Routes>
@@ -153,15 +149,7 @@ function ProtectedRoutes(): ReactNode {
   }, [initialPath, navigate]);
   if (state.kind === "loading") return null;
   if (state.kind === "blocked") return <Navigate to="/banned" replace />;
-  if (state.kind === "unauthenticated")
-    return (
-      <Navigate
-        to={
-          state.needsSetup ? "/setup" : `/login?returnTo=${encodeURIComponent(location.pathname)}`
-        }
-        replace
-      />
-    );
+  if (state.kind === "unauthenticated") return <Navigate to="/" replace />;
   return (
     <DashboardShell user={state.user}>
       <ErrorBoundary resetKey={location.pathname}>

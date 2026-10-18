@@ -7,6 +7,10 @@ if (rootElement === null) {
   throw new Error("Dashboard root element is missing");
 }
 
+if (window.location.pathname === "/" || window.location.pathname === "") {
+  window.location.replace("/console");
+}
+
 const app = resolveDashboardApp(window.location.pathname);
 
 if (app === "console") {

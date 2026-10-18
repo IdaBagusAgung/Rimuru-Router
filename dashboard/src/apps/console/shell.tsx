@@ -6,7 +6,6 @@ import {
   FlaskConical,
   Globe,
   LayoutDashboard,
-  LogOut,
   MemoryStick,
   Menu,
   Monitor,
@@ -26,12 +25,10 @@ import {
 import { Palette } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { applyConsoleTheme, isDarkEffective, readConsoleTheme, writeConsoleTheme } from "../../lib/theme";
 import { BackgroundLayer } from "../../features/customization/BackgroundLayer";
 import { applyCustomization, readCustomizationSettings } from "../../features/customization/settings";
-import { consoleRequest } from "../../data/api";
-import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { queryClient } from "../../data/query-client";
 import { prefetchRouteIntent } from "../../data/route-prefetch";
 import { useSystemHealth, useLatestRelease } from "../../hooks/system";
@@ -523,11 +520,8 @@ export function DashboardShell({
   readonly user: SessionUser;
   readonly children: ReactNode;
 }): ReactNode {
-  const navigate = useNavigate();
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [loggingOut, setLoggingOut] = useState(false);
-  const [logoutOpen, setLogoutOpen] = useState(false);
   const healthQuery = useSafeSystemHealth();
   const releaseQuery = useLatestRelease();
   // The running version is the gateway's, not the bundled dashboard's: the
@@ -560,17 +554,6 @@ export function DashboardShell({
   useLayoutEffect(() => {
     window.scrollTo(0, 0);
   }, [location.pathname]);
-  const logout = async () => {
-    setLoggingOut(true);
-    try {
-      await consoleRequest<void>("/auth/logout", { method: "POST" });
-    } finally {
-      // Drop every cached tenant view before leaving so the next login
-      // never renders the previous tenant's data.
-      queryClient.clear();
-      navigate("/login", { replace: true });
-    }
-  };
 
   useEffect(() => {
     document.documentElement.dataset.glassEnabled = "true";
@@ -655,18 +638,8 @@ export function DashboardShell({
               </div>
               <div className="user-info">
                 <p className="user-name">{user.displayName || "Admin"}</p>
-                <p className="user-role">{user.email}</p>
+                <p className="user-role">{user.email || "Local Mode"}</p>
               </div>
-              <button
-                type="button"
-                onClick={() => setLogoutOpen(true)}
-                disabled={loggingOut}
-                aria-label="Sign out"
-                title="Sign out"
-                className="topbar-icon-button w-15 h-15 rounded-inset"
-              >
-                <LogOut size={14} />
-              </button>
             </div>
           </div>
         </aside>
@@ -706,15 +679,6 @@ export function DashboardShell({
         </div>
       </div>
       </div>
-      <ConfirmDialog
-        open={logoutOpen}
-        onClose={() => setLogoutOpen(false)}
-        onConfirm={logout}
-        title="Sign out?"
-        message="You will need to sign in again to open the console."
-        confirmLabel="Sign out"
-        danger
-      />
     </>
   );
 }
