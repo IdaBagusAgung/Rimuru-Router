@@ -1,0 +1,60 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rimuru-gateway:latest
+    container_name: rimuru-gateway
+    ports:
+      - "12800:12800"
+      - "3888:12800"
+      - "3000:12800"
+    env_file:
+      - "${RIMURU_ENV_FILE:-${CARTETHYIA_ENV_FILE:-.env}}"
+    environment:
+      NODE_ENV: production
+      PORT: "12800"
+      DASHBOARD_DIST: /app/dist/dashboard
+      CARTETHYIA_DATA_DIR: /app/data
+      CARTETHYIA_DB_MODE: ${CARTETHYIA_DB_MODE:-lite}
+      REDIS_URL: ${CARTETHYIA_REDIS_URL:-${REDIS_URL:-redis://redis:6379}}
+      CARTETHYIA_ENCRYPTION_KEY: ${CARTETHYIA_ENCRYPTION_KEY:-${RIMURU_ENCRYPTION_KEY}}
+      CARTETHYIA_API_KEY: ${CARTETHYIA_API_KEY:-${RIMURU_API_KEY:-sk-rimuru-tempest}}
+      CARTETHYIA_ADMIN_USERNAME: ${CARTETHYIA_ADMIN_USERNAME:-${RIMURU_ADMIN_USERNAME:-admin}}
+      CARTETHYIA_ADMIN_PASSWORD: ${CARTETHYIA_ADMIN_PASSWORD:-${RIMURU_ADMIN_PASSWORD}}
+      RIMURU_API_KEY: ${RIMURU_API_KEY:-${CARTETHYIA_API_KEY:-sk-rimuru-tempest}}
+      RIMURU_ADMIN_USERNAME: ${RIMURU_ADMIN_USERNAME:-${CARTETHYIA_ADMIN_USERNAME:-admin}}
+      RIMURU_ADMIN_PASSWORD: ${RIMURU_ADMIN_PASSWORD:-${CARTETHYIA_ADMIN_PASSWORD}}
+    depends_on:
+      - redis
+    volumes:
+      - cartethyia-data:/app/data
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    restart: unless-stopped
+    networks:
+      - cartethyia
+
+  redis:
+    image: redis:7.4.2-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - cartethyia
+
+volumes:
+  redisdata:
+  cartethyia-data:
+
+networks:
+  cartethyia:
+    driver: bridge
