@@ -13,7 +13,7 @@ import { models, providerAccounts, providerOauthStates, providers, telemetryUsag
 import { queryTelemetryEvents } from "../../../observability/event-log";
 import { isGatewayError } from "../../../observability/telemetry-status";
 import type { WireFamily } from "../../../protocol/canonical-model";
-import { listAccountHealthEvents, recoverAccount, type AccountHealthEventRecord } from "../../../providers/operations/account-health-service";
+import { listAccountHealthEvents, recoverAccount, recoverAllAccounts, type AccountHealthEventRecord } from "../../../providers/operations/account-health-service";
 import { invalidateCredentialCache } from "../../../providers/operations/provider-credential-service";
 import { encryptCredential, hashSecret } from "../../../security/crypto";
 import type { TelemetryBatchBuffer } from "../../../observability/telemetry-buffer";
@@ -1454,6 +1454,12 @@ export class DrizzleProviderCatalogStore implements ProviderCatalogStore {
     return recoverAccount(this.db, accountId, "manual_operator_recovery");
   }
 
+  async recoverAllAccounts(
+    tenantId: string,
+    providerId?: string,
+  ): Promise<{ success: boolean; recoveredCount: number }> {
+    return recoverAllAccounts(this.db, { tenantId, providerId, reason: "manual_bulk_operator_recovery" });
+  }
 
   async syncModels(tenantId: string, providerId: string): Promise<{ synced: number }> {
     return this.probing.syncModels(tenantId, providerId);

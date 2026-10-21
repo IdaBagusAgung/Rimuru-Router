@@ -26,6 +26,12 @@ export interface RuntimeSettingsResponse {
   readonly ponyTailEnabled: boolean;
   /** PonyTail directive intensity; `full` by default. */
   readonly ponyTailLevel: PonyTailLevel;
+  /** Master cooling system switch. When false, cooldowns are completely bypassed. Default true. */
+  readonly cooldownSystemEnabled: boolean;
+  /** Zero cooldown endless mode for CodeBuddy accounts. Default true. */
+  readonly codebuddyEndlessMode: boolean;
+  /** Auto-recovery background engine. Default true. */
+  readonly autoRecoveryEnabled: boolean;
   readonly updatedAt: string;
 }
 
@@ -150,4 +156,7 @@ export const runtimeUpdateBody = t.Object({
   rtkPruneLevel: t.Optional(literalUnion(RTK_LEVELS)),
   ponyTailEnabled: t.Optional(t.Boolean()),
   ponyTailLevel: t.Optional(literalUnion(PONYTAIL_LEVELS)),
+  cooldownSystemEnabled: t.Optional(t.Boolean()),
+  codebuddyEndlessMode: t.Optional(t.Boolean()),
+  autoRecoveryEnabled: t.Optional(t.Boolean()),
 });

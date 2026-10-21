@@ -35,6 +35,7 @@ const Providers = lazyWithRetry(() => import("./features/providers/ProvidersPage
 const Combos = lazyWithRetry(() => import("./features/routing/CombosPage"), "combos");
 const Quota = lazyWithRetry(() => import("./features/quota/QuotaPage"), "quota");
 const Proxy = lazyWithRetry(() => import("./features/proxy/ProxyPage"), "proxy");
+const CoolingPage = lazyWithRetry(() => import("./features/cooling/CoolingPage"), "cooling");
 const Settings = lazyWithRetry(() => import("./features/settings/SettingsPage"), "settings");
 const CliTools = lazyWithRetry(() => import("./features/cli-tools/CliToolsPage"), "cli-tools");
 const CliToolDetail = lazyWithRetry(() => import("./features/cli-tools/CliToolDetailPage"), "cli-tool-detail");
@@ -166,6 +167,7 @@ function ProtectedRoutes(): ReactNode {
           <Route path="/model-lab" element={<Studio />} />
           <Route path="/cli-tools" element={<CliTools />} />
           <Route path="/cli-tools/:toolId" element={<CliToolDetail />} />
+          <Route path="/cooling" element={<CoolingPage />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

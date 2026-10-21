@@ -1,11 +1,11 @@
-// Account health: error classification, failure/success recording, recovery and cooldown sweeps.
-import { and, desc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, lte, ne, or, sql } from "drizzle-orm";
 import { affectedRows, pruneExpiredCooldowns } from "../../persistence/dialect";
 import type { CartethyiaDatabase } from "../../persistence/db-handle";
 import { isRecord } from "../../protocol/codecs";
 import { GatewayError } from "../../protocol/gateway-error";
 import { BUDDY_PROVIDER_IDS } from "../provider-metadata";
 import { healthEvents, providerAccounts } from "../../persistence/schema";
+import { preferencesReaderFor } from "../../persistence/tenant-preferences";
 
 import { parseProviderResetDuration, parseUpstreamBackoff } from "../../transport/failure-policy";
 import {
@@ -888,12 +888,32 @@ export async function recordAccountFailure(
         // counted", which is the common case and must stay cheap.
         modelBlockHits: providerAccounts.modelBlockHits,
         cooldownUntil: providerAccounts.cooldownUntil,
+        tenantId: providerAccounts.tenantId,
+        providerId: providerAccounts.providerId,
       })
       .from(providerAccounts)
       .where(eq(providerAccounts.id, accountId))
       .limit(1);
     const account = accountRows[0];
     if (!account || account.status === "disabled") return null;
+
+    let cooldownBypassed = false;
+    if (account.tenantId) {
+      try {
+        const prefs = await preferencesReaderFor(client).readPreferences(account.tenantId);
+        const cooldownEnabled = prefs?.cooldownSystemEnabled !== false;
+        const isBuddy = BUDDY_PROVIDER_IDS.has(account.providerId.toLowerCase());
+        const endless = prefs?.codebuddyEndlessMode !== false;
+        if (!cooldownEnabled || (isBuddy && endless)) {
+          cooldownBypassed = true;
+        }
+      } catch {
+        // non-fatal read failure
+      }
+    } else {
+      const isBuddy = BUDDY_PROVIDER_IDS.has(account.providerId.toLowerCase());
+      if (isBuddy) cooldownBypassed = true;
+    }
 
     // Re-classify with the account's own static-token flag. The caller's
     // evidence is request-scoped and does not carry it, but an auth rejection
@@ -980,10 +1000,11 @@ export async function recordAccountFailure(
       // incremented on the account-wide path below, and `consecutiveFailures`
       // stays honest about what it always claimed to count: how many failures in
       // a row this account has just produced.
+      const nextCooldowns = cooldownBypassed ? {} : { ...existing, [modelId]: nextUntil };
       await client
         .update(providerAccounts)
         .set({
-          modelCooldowns: { ...existing, [modelId]: nextUntil },
+          modelCooldowns: nextCooldowns,
           // Counted only for the unsupported-model ladder, and only when this
           // failure is that verdict — so a rate limit or a capacity refusal
           // never advances it. `model_cooldowns`' own shape is untouched, so
@@ -997,16 +1018,10 @@ export async function recordAccountFailure(
           lastErrorAt: now,
         })
         .where(eq(providerAccounts.id, accountId));
-      if (!alreadyCooling && typeof client.insert === "function") {
+      if (!alreadyCooling && !cooldownBypassed && typeof client.insert === "function") {
         await client.insert(healthEvents).values({
           entityKind: "account",
           accountId,
-          // The account's own status, on both sides: a model-scoped throttle
-          // never moved it, and writing the classification's status here
-          // claimed an `active → cooldown` transition that never happened — the
-          // dialog showed "Account status: ACTIVE" above a list of transitions
-          // to `cooldown`. The row still names the model and the reason, which
-          // is what makes it worth keeping.
           fromStatus: fromStatus as "active" | "cooldown" | "disabled",
           toStatus: fromStatus as "active" | "cooldown" | "disabled",
           reason: effective.reason,
@@ -1015,46 +1030,53 @@ export async function recordAccountFailure(
           createdAt: now,
         });
       }
-      return classification;
+      return cooldownBypassed ? { ...classification, cooldownMs: 0 } : classification;
     }
+
+    const targetStatus = cooldownBypassed
+      ? (effective.status === "disabled" ? "disabled" : fromStatus)
+      : effective.status;
+    const targetCooldownUntil = cooldownBypassed
+      ? (effective.status === "disabled"
+          ? accountDeadlineMs([
+              effective.retryAt?.getTime(),
+              escalatedCooldownMs > 0 ? Date.now() + escalatedCooldownMs : undefined,
+              account.cooldownUntil?.getTime?.(),
+            ])
+          : null)
+      : accountDeadlineMs([
+          effective.retryAt?.getTime(),
+          escalatedCooldownMs > 0 ? Date.now() + escalatedCooldownMs : undefined,
+          account.cooldownUntil?.getTime?.(),
+        ]);
 
     await client
       .update(providerAccounts)
       .set({
-        status: effective.status,
+        status: targetStatus,
         consecutiveFailures: sql`${providerAccounts.consecutiveFailures} + 1`,
         lastError: effective.reason,
         lastErrorCategory: effective.category,
         lastErrorAt: now,
-        // Monotonic against the account's own in-force deadline, for the same
-        // reason as the model path: an unclassified 60-second failure must not
-        // release an account the provider parked for hours.
-        //
-        // A `0` duration contributes no candidate rather than stamping *now*
-        // (see `accountDeadlineMs`): the one state that asks for it is a
-        // terminal automatic disable, and an elapsed deadline there would hand
-        // the row straight back to the recovery sweep.
-        cooldownUntil: accountDeadlineMs([
-          effective.retryAt?.getTime(),
-          escalatedCooldownMs > 0 ? Date.now() + escalatedCooldownMs : undefined,
-          account.cooldownUntil?.getTime?.(),
-        ]),
+        cooldownUntil: targetCooldownUntil,
       })
       .where(eq(providerAccounts.id, accountId));
 
-    if (typeof client.insert === "function") {
+    if (typeof client.insert === "function" && targetStatus !== fromStatus) {
       await client.insert(healthEvents).values({
         entityKind: "account",
         accountId,
         fromStatus: fromStatus as "active" | "cooldown" | "disabled",
-        toStatus: effective.status,
+        toStatus: targetStatus,
         reason: effective.reason,
         errorCategory: effective.category,
         modelId: modelId ?? null,
         createdAt: now,
       });
     }
-    return classification;
+    return cooldownBypassed
+      ? { ...classification, cooldownMs: 0 }
+      : classification;
   };
 
   try {
@@ -1199,6 +1221,50 @@ export async function recoverAccount(
   }
 }
 
+/**
+ * Bulk recovers accounts and clears all per-model cooldowns across the system.
+ */
+export async function recoverAllAccounts(
+  db: CartethyiaDatabase,
+  options?: { tenantId?: string; providerId?: string; reason?: string },
+): Promise<{ success: boolean; recoveredCount: number }> {
+  const recover = async (client: CartethyiaDatabase): Promise<number> => {
+    const now = new Date();
+    const whereConditions = [ne(providerAccounts.status, "disabled")];
+    if (options?.tenantId) {
+      whereConditions.push(eq(providerAccounts.tenantId, options.tenantId));
+    }
+    if (options?.providerId) {
+      whereConditions.push(eq(providerAccounts.providerId, options.providerId));
+    }
+
+    const res = await client
+      .update(providerAccounts)
+      .set({
+        status: "active",
+        consecutiveFailures: 0,
+        cooldownUntil: null,
+        lastRecoveredAt: now,
+        modelCooldowns: {},
+        lastError: null,
+        lastErrorCategory: null,
+        lastErrorAt: null,
+      })
+      .where(and(...whereConditions));
+
+    return affectedRows(res);
+  };
+
+  try {
+    const count = typeof db.transaction === "function"
+      ? await db.transaction((tx) => recover(tx as CartethyiaDatabase))
+      : await recover(db);
+    return { success: true, recoveredCount: count };
+  } catch {
+    return { success: false, recoveredCount: 0 };
+  }
+}
+
 /** Recovers accounts whose cooldown elapsed and prunes expired per-model keys. */
 export async function sweepExpiredCooldowns(db: CartethyiaDatabase): Promise<number> {
   const recover = async (client: CartethyiaDatabase): Promise<number> => {
@@ -1230,17 +1296,13 @@ export async function sweepExpiredCooldowns(db: CartethyiaDatabase): Promise<num
             lte(providerAccounts.cooldownUntil, now),
           ),
           // Auto-recovery mode for CodeBuddy accounts:
-          // Automatically recover CodeBuddy accounts in cooldown or disabled after 60s
-          // so the user does not need to click "Recover" manually one-by-one.
+          // Immediately recover CodeBuddy accounts in cooldown or disabled every 5s sweep
+          // with zero delay so there is no space for the model to stop waiting for recovery.
           and(
-            inArray(providerAccounts.providerId, ["cb", "cbcn"]),
+            inArray(providerAccounts.providerId, [...BUDDY_PROVIDER_IDS]),
             or(
               eq(providerAccounts.status, "cooldown"),
               eq(providerAccounts.status, "disabled"),
-            ),
-            or(
-              isNull(providerAccounts.lastErrorAt),
-              lte(providerAccounts.lastErrorAt, new Date(Date.now() - 60_000)),
             ),
           ),
         ),

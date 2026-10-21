@@ -185,8 +185,14 @@ export function createProviderCatalogRoutes(config: ProviderCatalogConfig): Elys
           config.accessResolver(request),
           body as ByokConnectionTestRequest,
         );
-},
+      },
     )
+    .post("/recover-all", async ({ request, query }) => {
+      return await factory.recoverAllAccounts(
+        config.accessResolver(request),
+        (query as Record<string, string> | undefined)?.providerId,
+      );
+    })
     .get("/:providerId", async ({ request, params }) => {
       return await factory.getProviderDetail(config.accessResolver(request), params.providerId);
 })

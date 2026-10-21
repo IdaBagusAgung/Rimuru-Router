@@ -3,6 +3,7 @@ import {
   Bell,
   Clock,
   Cpu,
+  Flame,
   FlaskConical,
   Globe,
   LayoutDashboard,
@@ -72,6 +73,7 @@ export const navigationGroups: readonly NavGroupDef[] = [
   {
     label: "System",
     items: [
+      { label: "Cooling & Bypass", path: "/cooling", icon: Flame },
       { label: "Customization", path: "/customization", icon: Palette },
       { label: "Console Log", path: "/console-log", icon: ScrollText },
       { label: "Settings", path: "/settings", icon: SettingsIcon },
@@ -94,6 +96,11 @@ const titlesMap: Record<string, { title: string; sub: string; icon: LucideIcon }
     title: "Proxy & Requests",
     sub: "Network pools, SOCKS5/HTTP egress, and dispatch",
     icon: Network,
+  },
+  "/cooling": {
+    title: "Cooling & Bypass",
+    sub: "Cooldown overrides, CodeBuddy endless mode, and lockout bypass",
+    icon: Flame,
   },
   "/customization": { title: "Customization", sub: "Background, transparency, and blur", icon: Palette },
   "/model-lab": { title: "Model Lab", sub: "Chat a routed model without leaving the console", icon: FlaskConical },

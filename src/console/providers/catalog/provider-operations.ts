@@ -579,6 +579,21 @@ export function createProviderCatalogOperations(config: ProviderCatalogConfig) {
         await config.snapshotInvalidator?.invalidate();
         return { success: true };
       },
+    async recoverAllAccounts(
+        access: AccessDecision | undefined,
+        providerId?: string,
+      ): Promise<{ success: boolean; recoveredCount: number }> {
+        const a = requireTenantAnyScope(access, PROVIDER_WRITE_SCOPES);
+        const result = await config.store.recoverAllAccounts(a.tenantId, providerId);
+        await config.auditSink?.record({
+          access: a,
+          action: "provider_account.recovered_all",
+          target: a.tenantId,
+          detail: { providerId, recoveredCount: result.recoveredCount },
+        });
+        await config.snapshotInvalidator?.invalidate();
+        return result;
+      },
     /**
      * Exports the requested accounts with their decrypted credentials.
      *

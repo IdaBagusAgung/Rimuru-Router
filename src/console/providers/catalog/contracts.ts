@@ -753,6 +753,7 @@ export interface ProviderCatalogStore {
     accountId: string,
   ): Promise<readonly AccountHealthEventRecord[]>;
   recoverAccount(tenantId: string, providerId: string, accountId: string): Promise<boolean>;
+  recoverAllAccounts(tenantId: string, providerId?: string): Promise<{ success: boolean; recoveredCount: number }>;
 }
 
 /**

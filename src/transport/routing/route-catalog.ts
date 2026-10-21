@@ -14,8 +14,10 @@ import {
   tenantDisabledModels,
   cliToolMappings,
   cliToolSettings,
+  consoleSettings,
 } from "../../persistence/schema";
 import { DEFAULT_PROVIDER_MAX_INFLIGHT } from "../../persistence/schema";
+import { BUDDY_PROVIDER_IDS } from "../../providers/provider-metadata";
 import "../../providers/integrations/claude/claude-oauth";
 import "../../providers/integrations/codex/codex-oauth";
 import { resolveTenantOverride } from "../../persistence/tenant-scope";
@@ -326,7 +328,7 @@ class RouteCatalogRepository {
   constructor(private readonly db: CartethyiaDatabase) {}
 
   async loadRouteCatalogSnapshot(tenantId?: string): Promise<RouteCatalogSnapshotResult> {
-    const [providerRows, modelRows, accountRows, aliasRows, comboRows, routingRows, poolRows, disabledModelRows, cliMappingRows, cliMappingSettingRows, poolSettingRows] =
+    const [providerRows, modelRows, accountRows, aliasRows, comboRows, routingRows, poolRows, disabledModelRows, cliMappingRows, cliMappingSettingRows, poolSettingRows, settingsRows] =
       await Promise.all([
         this.db.select(PROVIDER_COLUMNS).from(providers).where(eq(providers.enabled, true)),
         this.db.select(MODEL_COLUMNS).from(models),
@@ -343,8 +345,14 @@ class RouteCatalogRepository {
         this.db.select(CLI_MAPPING_COLUMNS).from(cliToolMappings),
         this.db.select(CLI_MAPPING_SETTING_COLUMNS).from(cliToolSettings),
         this.db.select(POOL_SETTING_COLUMNS).from(poolRoutingSettings),
+        this.db.select({ tenantId: consoleSettings.tenantId, preferences: consoleSettings.preferences }).from(consoleSettings),
       ]);
     const mergedModelRows = mergeModelCatalog(modelRows);
+
+    const prefsByTenant = new Map<string, typeof consoleSettings.$inferSelect["preferences"]>();
+    for (const row of settingsRows) {
+      prefsByTenant.set(row.tenantId, row.preferences);
+    }
 
     // Compile tenant-scoped disables into a lookup keyed by the same
     // composite identity the `models` table uses. A disabled key suppresses
@@ -596,43 +604,38 @@ class RouteCatalogRepository {
               }
             : {}),
         };
-        if (account.status === "cooldown") {
-          // Expired cooldowns read as healthy here without a fire-and-forget
-          // write: AccountHealthSweeper materializes the recovery every 30s,
-          // so the builder stays a pure read (no UPDATE racing the request).
-          if (account.cooldownUntil && account.cooldownUntil.getTime() > Date.now()) {
-            candidate.health_status = "cooldown";
-            candidate.cooldown_kind = hardCooldownCategory(account.lastErrorCategory)
-              ? "hard"
-              : "soft";
-            // The deadline rides with the exclusion it explains. `plan()` reads
-            // it to answer the all-cooling case with the real reset instead of
-            // a bare 429, so a client backs off for the window that is actually
-            // open rather than inventing one.
-            candidate.cooldown_until = account.cooldownUntil.getTime();
-          }
-        }
+        const tenantPrefs = rowTenantId ? prefsByTenant.get(rowTenantId) : undefined;
+        const cooldownEnabled = tenantPrefs?.cooldownSystemEnabled !== false;
+        const isBuddy = BUDDY_PROVIDER_IDS.has(model.providerId.toLowerCase());
+        const endless = tenantPrefs?.codebuddyEndlessMode !== false;
+        const bypassCooldown = !cooldownEnabled || (isBuddy && endless);
 
-        // Per-model cooldown: an account may be healthy globally but cooling down
-        // for a specific model. A non-expired entry for the model THIS candidate
-        // serves is a hard exclusion, not a deprioritization: the upstream said
-        // this exact (account, model) pair is exhausted until a stated reset
-        // ("Daily free limit reached … Try again in 11h"), so dialing it can only
-        // reproduce the same refusal. Deprioritizing instead made failover spend
-        // a full round trip on it after every healthy sibling had failed, and
-        // recorded another `active → cooldown` row each time — the operator's
-        // report of one account churning while ten siblings sat healthy.
-        //
-        // `model_cooldown` (distinct from `cooldown`) is what carries that
-        // distinction to the evaluator: an account-wide `cooldown` stays
-        // deprioritized so a single-account deployment still routes, while a
-        // model-scoped one is dropped for this model only and the account keeps
-        // serving every other model it holds.
-        const modelCooldowns = account.modelCooldowns as Record<string, string> | null;
-        const modelCooldownUntil = modelCooldowns?.[model.modelId];
-        if (modelCooldownUntil && new Date(modelCooldownUntil).getTime() > Date.now()) {
-          candidate.health_status = "model_cooldown";
-          candidate.cooldown_until = new Date(modelCooldownUntil).getTime();
+        if (!bypassCooldown) {
+          if (account.status === "cooldown") {
+            // Expired cooldowns read as healthy here without a fire-and-forget
+            // write: AccountHealthSweeper materializes the recovery every 30s,
+            // so the builder stays a pure read (no UPDATE racing the request).
+            if (account.cooldownUntil && account.cooldownUntil.getTime() > Date.now()) {
+              candidate.health_status = "cooldown";
+              candidate.cooldown_kind = hardCooldownCategory(account.lastErrorCategory)
+                ? "hard"
+                : "soft";
+              // The deadline rides with the exclusion it explains. `plan()` reads
+              // it to answer the all-cooling case with the real reset instead of
+              // a bare 429, so a client backs off for the window that is actually
+              // open rather than inventing one.
+              candidate.cooldown_until = account.cooldownUntil.getTime();
+            }
+          }
+
+          // Per-model cooldown: an account may be healthy globally but cooling down
+          // for a specific model.
+          const modelCooldowns = account.modelCooldowns as Record<string, string> | null;
+          const modelCooldownUntil = modelCooldowns?.[model.modelId];
+          if (modelCooldownUntil && new Date(modelCooldownUntil).getTime() > Date.now()) {
+            candidate.health_status = "model_cooldown";
+            candidate.cooldown_until = new Date(modelCooldownUntil).getTime();
+          }
         }
         if (tenantId === undefined || candidate.tenant_id === null || candidate.tenant_id === tenantId) {
           candidates.push(candidate);

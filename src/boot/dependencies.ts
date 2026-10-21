@@ -381,7 +381,7 @@ export async function buildProductionDeps(): Promise<ProductionDeps> {
   }
   scheduledTasks.register({
     name: "account-health-sweep",
-    intervalMs: 30_000,
+    intervalMs: 5_000,
     run: async () => {
       const recovered = await sweepExpiredCooldowns(db);
       const poolRecovered = await sweepExpiredPoolCooldowns(db);

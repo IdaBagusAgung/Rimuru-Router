@@ -914,6 +914,12 @@ export interface ConsoleSettingsPreferences {
    */
   telemetryPayloadDepth?: "minimum" | "moderate" | "maximum";
   privacyMode?: "masked" | "full";
+  /** Master switch for cooling system. When false, cooldowns are completely bypassed. Default true. */
+  cooldownSystemEnabled?: boolean;
+  /** When true, CodeBuddy accounts run with zero cooldown (endless mode). Default true. */
+  codebuddyEndlessMode?: boolean;
+  /** When true, background auto-recovery periodically resets cooling accounts. Default true. */
+  autoRecoveryEnabled?: boolean;
 }
 
 export const consoleSettings = pgTable("console_settings", {

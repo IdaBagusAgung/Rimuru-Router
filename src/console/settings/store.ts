@@ -95,6 +95,9 @@ function mapRuntimeSettingsRow(
     // requires the flag — never injected it.
     ponyTailEnabled: prefs.ponyTailEnabled === true,
     ponyTailLevel: normalizePonyTailLevel(prefs.ponyTailLevel),
+    cooldownSystemEnabled: prefs.cooldownSystemEnabled !== false,
+    codebuddyEndlessMode: prefs.codebuddyEndlessMode !== false,
+    autoRecoveryEnabled: prefs.autoRecoveryEnabled !== false,
     updatedAt,
   };
 }
@@ -133,6 +136,9 @@ export class DrizzleRuntimeSettingsStore implements RuntimeSettingsStore {
     if (patch.rtkPruneLevel !== undefined) patchPrefs.rtkPruneLevel = patch.rtkPruneLevel;
     if (patch.ponyTailEnabled !== undefined) patchPrefs.ponyTailEnabled = patch.ponyTailEnabled;
     if (patch.ponyTailLevel !== undefined) patchPrefs.ponyTailLevel = patch.ponyTailLevel;
+    if (patch.cooldownSystemEnabled !== undefined) patchPrefs.cooldownSystemEnabled = patch.cooldownSystemEnabled;
+    if (patch.codebuddyEndlessMode !== undefined) patchPrefs.codebuddyEndlessMode = patch.codebuddyEndlessMode;
+    if (patch.autoRecoveryEnabled !== undefined) patchPrefs.autoRecoveryEnabled = patch.autoRecoveryEnabled;
 
     const rows = await this.db
       .insert(consoleSettings)

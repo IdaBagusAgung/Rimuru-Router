@@ -424,6 +424,34 @@ export function useRecoverAccount() {
   });
 }
 
+/** Bulk recovers accounts and resets cooldowns across all accounts or for one provider. */
+export function useRecoverAllAccounts() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { success: boolean; recoveredCount: number },
+    ApiErrorShape,
+    { providerId?: string } | void
+  >({
+    mutationFn: (variables) => {
+      const q = variables && "providerId" in variables && variables.providerId ? `?providerId=${encodeURIComponent(variables.providerId)}` : "";
+      return consoleRequest<{ success: boolean; recoveredCount: number }>(`/providers/recover-all${q}`, {
+        method: "POST",
+        body: "{}",
+      });
+    },
+    onSuccess: async (data) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.providers.all }),
+        queryClient.invalidateQueries({ queryKey: ["console", "providers"] }),
+      ]);
+      toast.success(`Recovered ${data.recoveredCount ?? "all"} account(s) and cleared cooldowns`);
+    },
+    onError: (error) => {
+      toast.error(getErrorMessage(error, "Could not recover accounts."));
+    },
+  });
+}
+
 /**
  * Exports the selected accounts (with decrypted credentials) for one provider.
  * Returns the raw export body so the caller owns the download step; a mutation
