@@ -1,5 +1,5 @@
 // Account health: error classification, failure/success recording, recovery and cooldown sweeps.
-import { and, desc, eq, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { affectedRows, pruneExpiredCooldowns } from "../../persistence/dialect";
 import type { CartethyiaDatabase } from "../../persistence/db-handle";
 import { isRecord } from "../../protocol/codecs";
@@ -1229,6 +1229,20 @@ export async function sweepExpiredCooldowns(db: CartethyiaDatabase): Promise<num
             isNotNull(providerAccounts.cooldownUntil),
             lte(providerAccounts.cooldownUntil, now),
           ),
+          // Auto-recovery mode for CodeBuddy accounts:
+          // Automatically recover CodeBuddy accounts in cooldown or disabled after 60s
+          // so the user does not need to click "Recover" manually one-by-one.
+          and(
+            inArray(providerAccounts.providerId, ["cb", "cbcn"]),
+            or(
+              eq(providerAccounts.status, "cooldown"),
+              eq(providerAccounts.status, "disabled"),
+            ),
+            or(
+              isNull(providerAccounts.lastErrorAt),
+              lte(providerAccounts.lastErrorAt, new Date(Date.now() - 60_000)),
+            ),
+          ),
         ),
       )
       // One pass recovers a bounded batch. The sweep runs every 30s, so a
@@ -1244,11 +1258,10 @@ export async function sweepExpiredCooldowns(db: CartethyiaDatabase): Promise<num
           consecutiveFailures: 0,
           cooldownUntil: null,
           lastRecoveredAt: now,
-          // Cleared with the state it described. A recovered row that kept
-          // `auth_invalidated` still rendered the console's "Re-login required"
-          // pill above an `active` status, so the account read healthy to
-          // routing and broken to the operator at the same time.
+          modelCooldowns: {},
+          lastError: null,
           lastErrorCategory: null,
+          lastErrorAt: null,
         })
         .where(inArray(providerAccounts.id, expired.map((account) => account.id)));
       if (typeof client.insert === "function") {
@@ -1357,4 +1370,62 @@ export async function listAccountHealthEvents(
   } catch {
     return [];
   }
+}
+
+/**
+ * Bulk recovers all cooling or disabled accounts for a provider (or all providers).
+ */
+export async function autoRecoverAllAccounts(
+  db: CartethyiaDatabase,
+  providerId?: string,
+): Promise<number> {
+  const where = providerId
+    ? and(
+        eq(providerAccounts.providerId, providerId),
+        or(
+          eq(providerAccounts.status, "cooldown"),
+          eq(providerAccounts.status, "disabled"),
+          isNotNull(providerAccounts.cooldownUntil),
+        ),
+      )
+    : or(
+        eq(providerAccounts.status, "cooldown"),
+        eq(providerAccounts.status, "disabled"),
+        isNotNull(providerAccounts.cooldownUntil),
+      );
+  const now = new Date();
+  const accountsToRecover = await db
+    .select({ id: providerAccounts.id, status: providerAccounts.status })
+    .from(providerAccounts)
+    .where(where);
+  if (accountsToRecover.length === 0) return 0;
+  await db
+    .update(providerAccounts)
+    .set({
+      status: "active",
+      consecutiveFailures: 0,
+      cooldownUntil: null,
+      lastRecoveredAt: now,
+      modelCooldowns: {},
+      lastError: null,
+      lastErrorCategory: null,
+      lastErrorAt: null,
+    })
+    .where(inArray(providerAccounts.id, accountsToRecover.map((a) => a.id)));
+  if (typeof db.insert === "function") {
+    for (let offset = 0; offset < accountsToRecover.length; offset += 500) {
+      await db.insert(healthEvents).values(
+        accountsToRecover.slice(offset, offset + 500).map((account) => ({
+          entityKind: "account" as const,
+          accountId: account.id,
+          fromStatus: account.status as "active" | "cooldown" | "disabled",
+          toStatus: "active" as const,
+          reason: "auto_recovery_mode",
+          errorCategory: null,
+          createdAt: now,
+        })),
+      );
+    }
+  }
+  return accountsToRecover.length;
 }

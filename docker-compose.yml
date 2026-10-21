@@ -32,6 +32,8 @@ services:
     dns:
       - 1.1.1.1
       - 8.8.8.8
+    extra_hosts:
+      - "www.codebuddy.ai:43.169.32.91"
     restart: unless-stopped
     networks:
       - cartethyia

@@ -818,6 +818,28 @@ const TEST_ALL_CONCURRENCY = 3;
     else toast.error("Test partially failed", `${passed} passed, ${failed} failed`);
   };
 
+  const hasCoolingOrDisabled = accounts.some(
+    (a) => a.status === "cooldown" || a.status === "disabled" || Boolean(a.cooldownUntil),
+  );
+
+  const recoverAllAccounts = async () => {
+    const coolingAccounts = accounts.filter(
+      (a) => a.status === "cooldown" || a.status === "disabled" || Boolean(a.cooldownUntil),
+    );
+    const targetAccounts = coolingAccounts.length > 0 ? coolingAccounts : accounts;
+    if (targetAccounts.length === 0) return;
+    setBulkBusy(true);
+    const results = await Promise.allSettled(
+      targetAccounts.map((account) =>
+        recover.mutateAsync({ providerId, accountId: account.id }),
+      ),
+    );
+    const failed = results.filter((result) => result.status === "rejected").length;
+    const ok = results.length - failed;
+    setBulkBusy(false);
+    toast.success("Recover complete", `${ok} account${ok === 1 ? "" : "s"} recovered to active`);
+  };
+
   const bulkSetActive = (active: boolean) =>
     runBulk(active ? "Enable" : "Disable", (account) =>
       update.mutateAsync({
@@ -903,6 +925,26 @@ const TEST_ALL_CONCURRENCY = 3;
             title="Test every account, regardless of selection or filters"
           >
             Test all
+          </Button>
+          {(providerId === "cb" || providerId === "cbcn") && (
+            <span
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-control text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+              title="Auto-Recovery Mode is active: CodeBuddy accounts are automatically tested and restored from cooldown."
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              Auto-Recovery Active
+            </span>
+          )}
+          <Button
+            size="sm"
+            variant={hasCoolingOrDisabled ? "danger" : "secondary"}
+            icon={<RotateCcw size={12} />}
+            disabled={bulkBusy || accounts.length === 0}
+            onClick={recoverAllAccounts}
+            aria-label="Recover all accounts"
+            title="Recover all cooling and disabled accounts to active state"
+          >
+            Recover all
           </Button>
           <div ref={bulkMenuRef} className="relative">
               <Button

@@ -25,6 +25,22 @@ esac
 # otherwise the lite database cannot write and every telemetry payload capture
 # fails while the console still reports capture as enabled.
 if [ "$(id -u)" = "0" ]; then
+  # Fix DNS sinkhole / 0.0.0.1 ECONNREFUSED for CodeBuddy
+  CURRENT_CB_IP=$(getent hosts www.codebuddy.ai 2>/dev/null | awk '{print $1}')
+  if [ -z "$CURRENT_CB_IP" ] || [ "$CURRENT_CB_IP" = "0.0.0.1" ]; then
+    RESOLVED_IP=$(nslookup www.codebuddy.ai 1.1.1.1 2>/dev/null | grep 'Address: ' | tail -n 1 | sed 's/Address: *//')
+    if [ -z "$RESOLVED_IP" ] || [ "$RESOLVED_IP" = "0.0.0.1" ]; then
+      RESOLVED_IP=$(nslookup www.codebuddy.ai 8.8.8.8 2>/dev/null | grep 'Address: ' | tail -n 1 | sed 's/Address: *//')
+    fi
+    if [ -n "$RESOLVED_IP" ] && [ "$RESOLVED_IP" != "0.0.0.1" ]; then
+      sed -i '/www.codebuddy.ai/d' /etc/hosts 2>/dev/null || true
+      echo "$RESOLVED_IP www.codebuddy.ai" >> /etc/hosts
+    else
+      sed -i '/www.codebuddy.ai/d' /etc/hosts 2>/dev/null || true
+      echo "43.169.32.91 www.codebuddy.ai" >> /etc/hosts
+    fi
+  fi
+
   mkdir -p "$STATE_DIR" "$PAYLOAD_DIR" 2>/dev/null || true
   chown -R "$APP_UID:$APP_GID" "$STATE_DIR" "$PAYLOAD_DIR" 2>/dev/null || true
   exec setpriv --reuid="$APP_UID" --regid="$APP_GID" --init-groups "$@"

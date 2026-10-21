@@ -17,6 +17,7 @@ import type { ProviderId } from "../../providers/provider-contracts";
 import type { ProviderRegistry } from "../../providers/provider-registry";
 import { GLOBAL_QUOTA_LENS, setCachedQuota } from "./cache";
 import { record } from "../../providers/authentication/oauth-flow-store";
+import { recoverAccount } from "../../providers/operations/account-health-service";
 
 /** Why an account quota refresh failed; `null` means the fetch succeeded. */
 export type QuotaRefreshFailureCode = "missing_credential" | "quota_fetch_failed";
@@ -37,8 +38,8 @@ export const QUOTA_REFRESH_TIMEOUT_MS = 15_000;
  * back, and the account should stop being dialed until the cooldown elapses.
  */
 export const QUOTA_FAILURE_PARK_THRESHOLD = 3;
-/** How long a quota-parked account stays out of rotation. */
-export const QUOTA_FAILURE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+/** How long a quota-parked account stays out of rotation (2m, fast auto-recovery). */
+export const QUOTA_FAILURE_COOLDOWN_MS = 2 * 60 * 1000;
 
 export interface QuotaRefreshDeps {
   readonly db: CartethyiaDatabase;
@@ -137,21 +138,27 @@ export async function recordAccountCheck(
   accountId: string,
   outcome: { ok: boolean; error?: string | null; category?: string | null },
 ): Promise<void> {
-  const activeOnly = and(
-    eq(providerAccounts.id, accountId),
-    eq(providerAccounts.status, "active"),
-  );
   if (outcome.ok) {
-    await db
-      .update(providerAccounts)
-      .set({
-        lastSuccessAt: new Date(),
-        lastError: null,
-        lastErrorCategory: null,
-        lastErrorAt: null,
-        consecutiveFailures: 0,
-      })
-      .where(activeOnly);
+    const existing = await db
+      .select({ status: providerAccounts.status })
+      .from(providerAccounts)
+      .where(eq(providerAccounts.id, accountId))
+      .limit(1);
+    if (existing[0] && existing[0].status !== "active") {
+      // Quota check succeeded! Auto-recover the account immediately.
+      await recoverAccount(db, accountId, "quota_check_succeeded_auto_recovery");
+    } else {
+      await db
+        .update(providerAccounts)
+        .set({
+          lastSuccessAt: new Date(),
+          lastError: null,
+          lastErrorCategory: null,
+          lastErrorAt: null,
+          consecutiveFailures: 0,
+        })
+        .where(eq(providerAccounts.id, accountId));
+    }
     return;
   }
   const transient = isTransientTimeout(outcome.error);
@@ -164,6 +171,10 @@ export async function recordAccountCheck(
   // A timeout is annotated but NOT counted: it is evidence about the network,
   // not the credential, and letting it advance the streak is what parked
   // healthy accounts for six hours over three slow passes.
+  const activeOnly = and(
+    eq(providerAccounts.id, accountId),
+    eq(providerAccounts.status, "active"),
+  );
   const failing = await db
     .update(providerAccounts)
     .set({
