@@ -1,15 +1,20 @@
 import {
+  AlertTriangle,
+  Clock,
   Cpu,
   Flame,
   Info,
+  Pause,
+  Play,
   RefreshCw,
   RotateCcw,
+  ShieldAlert,
   ShieldCheck,
   ShieldOff,
   Sparkles,
   Zap,
 } from "lucide-react";
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button } from "../../components/ui/button";
 import { Card, CardBody, CardHeader } from "../../components/ui/card";
 import { ErrorState, LoadingState } from "../../components/ui/state";
@@ -32,13 +37,20 @@ function ProviderAccountsList({
   providerName,
   onRecoverAccount,
   isRecovering,
+  refetchInterval,
+  codebuddyEndlessMode,
+  autoRecoveryIntervalMs,
 }: {
   providerId: string;
   providerName: string;
   onRecoverAccount: (providerId: string, accountId: string) => void;
   isRecovering: boolean;
+  refetchInterval: number | false;
+  codebuddyEndlessMode: boolean;
+  autoRecoveryIntervalMs: number;
 }): ReactNode {
-  const { data: accounts, isLoading } = useProviderAccounts(providerId);
+  const { data: accounts, isLoading } = useProviderAccounts(providerId, { refetchInterval });
+  const isBuddy = providerId === "cb" || providerId === "cbcn";
 
   if (isLoading) {
     return (
@@ -72,7 +84,7 @@ function ProviderAccountsList({
             className="flex flex-col sm:flex-row sm:items-center justify-between p-4 gap-3 hover:bg-hover/30 transition-colors"
           >
             <div className="space-y-1">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-medium text-sm text-text-primary">
                   {acc.label || acc.id}
                 </span>
@@ -80,12 +92,19 @@ function ProviderAccountsList({
                   {providerName}
                 </span>
                 {acc.status === "active" && !hasModelCooldowns ? (
-                  <Badge tone="ok" className="text-xs">
-                    Active
-                  </Badge>
+                  isBuddy && codebuddyEndlessMode ? (
+                    <Badge tone="ok" className="text-xs flex items-center gap-1 border border-emerald-500/30 bg-emerald-500/10 text-emerald-400">
+                      <Sparkles size={11} />
+                      Zero-Cooldown Active
+                    </Badge>
+                  ) : (
+                    <Badge tone="ok" className="text-xs">
+                      Active
+                    </Badge>
+                  )
                 ) : isCooldown ? (
-                  <Badge tone="warn" className="text-xs animate-pulse">
-                    Account Cooldown
+                  <Badge tone="warn" className="text-xs animate-pulse bg-amber-500/15 border-amber-500/30 text-amber-300">
+                    Account Cooldown (Auto-Sweep: {(autoRecoveryIntervalMs / 1000).toFixed(1)}s)
                   </Badge>
                 ) : (
                   <Badge tone="warn" className="text-xs">
@@ -94,7 +113,7 @@ function ProviderAccountsList({
                 )}
               </div>
               <div className="text-xs text-text-tertiary space-y-0.5">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-wrap">
                   <span>Failures: {acc.consecutiveFailures ?? 0}</span>
                   {acc.cooldownUntil && (
                     <span>
@@ -172,6 +191,29 @@ export default function CoolingPage(): ReactNode {
     });
   }, [providers]);
 
+  const autoRecoveryIntervalMs = settings?.autoRecoveryIntervalMs ?? 1000;
+  const [customIntervalInput, setCustomIntervalInput] = useState<string>(
+    String(autoRecoveryIntervalMs / 1000),
+  );
+  const [livePolling, setLivePolling] = useState<boolean>(true);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date>(new Date());
+
+  // Keep input in sync when backend value loads
+  useEffect(() => {
+    if (settings?.autoRecoveryIntervalMs) {
+      setCustomIntervalInput(String(settings.autoRecoveryIntervalMs / 1000));
+    }
+  }, [settings?.autoRecoveryIntervalMs]);
+
+  // Update refreshed timestamp periodically when live polling
+  useEffect(() => {
+    if (!livePolling) return;
+    const timer = setInterval(() => {
+      setLastRefreshedAt(new Date());
+    }, Math.max(1000, autoRecoveryIntervalMs));
+    return () => clearInterval(timer);
+  }, [livePolling, autoRecoveryIntervalMs]);
+
   if (query.isPending || providersLoading) {
     return <LoadingState label="Loading cooling settings and account states…" />;
   }
@@ -243,6 +285,31 @@ export default function CoolingPage(): ReactNode {
     );
   };
 
+  const handleSetIntervalMs = (ms: number) => {
+    mutation.mutate(
+      { autoRecoveryIntervalMs: ms },
+      {
+        onSuccess: () => {
+          toast.success(`Auto-recovery interval updated to ${(ms / 1000).toFixed(1)}s`);
+          setCustomIntervalInput(String(ms / 1000));
+        },
+        onError: (err) => {
+          toast.error(getErrorMessage(err, "Failed to update recovery interval"));
+        },
+      },
+    );
+  };
+
+  const handleApplyCustomInterval = () => {
+    const parsedSec = parseFloat(customIntervalInput);
+    if (isNaN(parsedSec) || parsedSec < 0.5 || parsedSec > 3600) {
+      toast.error("Please enter a valid interval between 0.5 and 3600 seconds.");
+      return;
+    }
+    const ms = Math.round(parsedSec * 1000);
+    handleSetIntervalMs(ms);
+  };
+
   const handleRecoverAll = (providerId?: string) => {
     recoverAllMutation.mutate(providerId ? { providerId } : undefined);
   };
@@ -250,6 +317,8 @@ export default function CoolingPage(): ReactNode {
   const handleRecoverSingle = (providerId: string, accountId: string) => {
     recoverSingleMutation.mutate({ providerId, accountId });
   };
+
+  const pollingCadenceMs = livePolling ? Math.max(1000, autoRecoveryIntervalMs) : false;
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto pb-12">
@@ -265,7 +334,7 @@ export default function CoolingPage(): ReactNode {
                 <Flame size={26} className="animate-pulse" />
               </div>
               <div>
-                <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-text-primary flex items-center gap-2">
+                <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-text-primary flex items-center gap-2 flex-wrap">
                   Cooling & Lockout Bypass
                   <Badge
                     tone={!cooldownSystemEnabled ? "warn" : codebuddyEndlessMode ? "ok" : "default"}
@@ -277,6 +346,12 @@ export default function CoolingPage(): ReactNode {
                       ? "CodeBuddy Endless Active"
                       : "Standard Cooldowns"}
                   </Badge>
+                  {autoRecoveryEnabled && (
+                    <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-mono font-medium bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                      <Clock size={12} />
+                      {(autoRecoveryIntervalMs / 1000).toFixed(1)}s Cadence
+                    </span>
+                  )}
                 </h1>
                 <p className="text-sm text-text-tertiary">
                   Switch off cooldown restrictions and let CodeBuddy and your accounts execute continuously without lockouts.
@@ -286,6 +361,31 @@ export default function CoolingPage(): ReactNode {
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
+            {/* Live Polling Toggle */}
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-surface-secondary border border-border-subtle text-xs text-text-secondary">
+              <span className="relative flex h-2.5 w-2.5">
+                {livePolling && autoRecoveryEnabled && (
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                )}
+                <span
+                  className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                    livePolling && autoRecoveryEnabled ? "bg-emerald-500" : "bg-text-tertiary"
+                  }`}
+                />
+              </span>
+              <span className="font-mono text-text-primary">
+                {livePolling ? `Live Refresh: ${(autoRecoveryIntervalMs / 1000).toFixed(1)}s` : "Refresh Paused"}
+              </span>
+              <button
+                type="button"
+                onClick={() => setLivePolling((p) => !p)}
+                title={livePolling ? "Pause live visual refresh" : "Resume live visual refresh"}
+                className="p-1 hover:bg-hover rounded text-text-tertiary hover:text-text-primary transition-colors cursor-pointer"
+              >
+                {livePolling ? <Pause size={13} /> : <Play size={13} />}
+              </button>
+            </div>
+
             <Button
               variant="secondary"
               size="md"
@@ -345,7 +445,7 @@ export default function CoolingPage(): ReactNode {
           </p>
           <p className="text-xs text-text-tertiary mt-0.5">
             {codebuddyEndlessMode
-              ? "CodeBuddy accounts run as long as possible"
+              ? "CodeBuddy accounts run with zero cooldown backoff"
               : "Standard daily / rate limit cooldowns"}
           </p>
         </div>
@@ -355,14 +455,18 @@ export default function CoolingPage(): ReactNode {
             <span className="text-xs font-medium text-text-tertiary uppercase tracking-wider">
               Auto-Recovery Engine
             </span>
-            <RefreshCw size={16} className={autoRecoveryEnabled ? "text-cyan-400 animate-spin" : "text-text-tertiary"} style={{ animationDuration: "12s" }} />
+            <RefreshCw
+              size={16}
+              className={autoRecoveryEnabled ? "text-cyan-400 animate-spin" : "text-text-tertiary"}
+              style={{ animationDuration: `${Math.max(2, autoRecoveryIntervalMs / 500)}s` }}
+            />
           </div>
           <p className="text-lg font-bold text-text-primary mt-1">
-            {autoRecoveryEnabled ? "Active (Every 5s)" : "Disabled"}
+            {autoRecoveryEnabled ? `Active (Every ${(autoRecoveryIntervalMs / 1000).toFixed(1)}s)` : "Disabled"}
           </p>
           <p className="text-xs text-text-tertiary mt-0.5">
             {autoRecoveryEnabled
-              ? "Continuously cleanses stuck cooldowns"
+              ? "Continuously cleanses stuck cooldowns in real-time"
               : "Manual recovery required"}
           </p>
         </div>
@@ -372,7 +476,7 @@ export default function CoolingPage(): ReactNode {
       <Card>
         <CardHeader
           title="Bypass & Cooldown Controls"
-          subtitle="Configure system-wide cooling bypass and CodeBuddy zero-cooldown behaviors"
+          subtitle="Configure system-wide cooling bypass and dynamic recovery sweep timing"
           icon={<Flame size={18} className="text-amber-400" />}
         />
         <CardBody className="divide-y divide-border-subtle p-0">
@@ -434,16 +538,21 @@ export default function CoolingPage(): ReactNode {
             </div>
           </div>
 
-          {/* Auto Recovery */}
+          {/* Auto Recovery Switch */}
           <div className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="space-y-1 pr-4">
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-text-primary">
                   Automatic Background Recovery Engine
                 </span>
+                {autoRecoveryEnabled && (
+                  <Badge tone="ok" className="text-xs">
+                    Running ({(autoRecoveryIntervalMs / 1000).toFixed(1)}s Cadence)
+                  </Badge>
+                )}
               </div>
               <p className="text-xs sm:text-sm text-text-tertiary max-w-2xl">
-                Runs an automated background sweep every 5 seconds to recover any accounts that may have recorded cooldown timestamps or previous error states, keeping them fresh and routable.
+                Runs an automated background sweep dynamically to recover any accounts that may have recorded cooldown timestamps or previous error states, keeping them fresh and routable.
               </p>
             </div>
             <div className="flex items-center gap-3 shrink-0">
@@ -458,26 +567,170 @@ export default function CoolingPage(): ReactNode {
               />
             </div>
           </div>
+
+          {/* Dynamic Auto-Recovery Interval Config */}
+          <div className="p-5 space-y-4 bg-hover/10">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Clock size={16} className="text-cyan-400" />
+                  <span className="font-semibold text-sm text-text-primary">
+                    Auto-Recovery Sweep Interval (Dynamic Configuration)
+                  </span>
+                  <span className="text-xs font-mono px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+                    Active: {(autoRecoveryIntervalMs / 1000).toFixed(1)}s
+                  </span>
+                </div>
+                <p className="text-xs sm:text-sm text-text-tertiary max-w-2xl">
+                  Adjust how frequently the background engine sweeps and cleanses cooling accounts. Changes apply dynamically in real-time without restarting the proxy.
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Presets */}
+            <div className="space-y-2">
+              <span className="text-xs font-medium text-text-secondary">Quick Interval Presets:</span>
+              <div className="flex items-center gap-2 flex-wrap">
+                {[
+                  { label: "1.0s (Aggressive / Real-Time CodeBuddy)", ms: 1000, desc: "Default for zero-delay coding" },
+                  { label: "2.0s (Fast)", ms: 2000, desc: "Fast recovery" },
+                  { label: "5.0s (Standard)", ms: 5000, desc: "Previous default" },
+                  { label: "10.0s (Relaxed)", ms: 10000, desc: "Moderate polling" },
+                  { label: "30.0s (Low Resource)", ms: 30000, desc: "Minimal queries" },
+                ].map((preset) => {
+                  const isSelected = autoRecoveryIntervalMs === preset.ms;
+                  return (
+                    <button
+                      key={preset.ms}
+                      type="button"
+                      disabled={mutation.isPending}
+                      onClick={() => handleSetIntervalMs(preset.ms)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer border ${
+                        isSelected
+                          ? "bg-cyan-500/20 border-cyan-500/60 text-cyan-300 shadow-sm shadow-cyan-500/10 font-bold"
+                          : "bg-surface-secondary border-border-subtle text-text-secondary hover:text-text-primary hover:border-border-subtle/80 hover:bg-hover"
+                      }`}
+                      title={preset.desc}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Custom Input */}
+            <div className="pt-2 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-text-tertiary whitespace-nowrap">Custom Seconds:</span>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0.5"
+                  max="3600"
+                  value={customIntervalInput}
+                  onChange={(e) => setCustomIntervalInput(e.target.value)}
+                  disabled={mutation.isPending}
+                  className="w-24 px-3 py-1.5 rounded-lg bg-surface-2 border border-border-subtle text-xs text-text-primary font-mono focus:outline-none focus:border-cyan-500"
+                  placeholder="e.g. 1"
+                />
+                <span className="text-xs text-text-tertiary">sec</span>
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={mutation.isPending || parseFloat(customIntervalInput) * 1000 === autoRecoveryIntervalMs}
+                onClick={handleApplyCustomInterval}
+                className="text-xs border-cyan-500/30 hover:border-cyan-500/60 text-cyan-300 hover:bg-cyan-500/10"
+              >
+                Apply Custom Interval
+              </Button>
+            </div>
+          </div>
         </CardBody>
       </Card>
+
+      {/* Operational Risk & Impact Analysis Card */}
+      <div className="p-6 rounded-2xl border border-amber-500/30 bg-gradient-to-br from-amber-500/5 via-surface-secondary to-surface-primary space-y-4 shadow-lg shadow-amber-500/5">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400">
+            <ShieldAlert size={20} />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-text-primary flex items-center gap-2">
+              System Risk & Operational Impact Analysis (Analisa Resiko)
+            </h3>
+            <p className="text-xs text-text-tertiary">
+              Trade-offs and architectural impacts of executing auto-recovery and refresh sweeps every 1 second
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+          <div className="p-3.5 rounded-xl border border-border-subtle bg-surface-primary/60 space-y-1.5">
+            <div className="flex items-center gap-2 text-xs font-semibold text-amber-300">
+              <Zap size={14} />
+              <span>1. Database Lock & I/O Contention</span>
+            </div>
+            <p className="text-xs text-text-tertiary leading-relaxed">
+              Polling SQLite/Postgres at 1s issues continuous <code>SELECT</code> and conditional <code>UPDATE</code> queries. In Lite (SQLite) mode, busy locks could briefly contend with intense client proxy dispatches. With Cartethyia&apos;s indexed queries, each check takes &lt;1ms, but high account volume requires adequate I/O bandwidth.
+            </p>
+          </div>
+
+          <div className="p-3.5 rounded-xl border border-border-subtle bg-surface-primary/60 space-y-1.5">
+            <div className="flex items-center gap-2 text-xs font-semibold text-rose-300">
+              <AlertTriangle size={14} />
+              <span>2. Upstream Account Hard-Banning</span>
+            </div>
+            <p className="text-xs text-text-tertiary leading-relaxed">
+              When an upstream API (such as Tencent CodeBuddy or Anthropic) responds with HTTP 429, it indicates genuine token exhaustion or concurrency rate limits. Immediately recovering accounts within 1s and redialing can trigger upstream fraud gates, risking permanent IP blacklisting or account bans.
+            </p>
+          </div>
+
+          <div className="p-3.5 rounded-xl border border-border-subtle bg-surface-primary/60 space-y-1.5">
+            <div className="flex items-center gap-2 text-xs font-semibold text-cyan-300">
+              <RotateCcw size={14} />
+              <span>3. Route Snapshot Cache Churn</span>
+            </div>
+            <p className="text-xs text-text-tertiary leading-relaxed">
+              Every time the sweep recovers an account, it executes <code>snapshotService.invalidate()</code>. The router must re-index candidate pools. At 1s frequency during fluctuating error periods, this causes frequent route cache churn and CPU overhead in the Great Sage routing engine.
+            </p>
+          </div>
+
+          <div className="p-3.5 rounded-xl border border-border-subtle bg-surface-primary/60 space-y-1.5">
+            <div className="flex items-center gap-2 text-xs font-semibold text-emerald-300">
+              <Sparkles size={14} />
+              <span>4. Best Practice Recommendation</span>
+            </div>
+            <p className="text-xs text-text-tertiary leading-relaxed">
+              Keep <strong>CodeBuddy Endless Mode enabled</strong> so only transient limits are bypassed. Configure multiple provider accounts in RIMURU so dispatches automatically rotate across healthy credentials rather than bombarding a single exhausted account.
+            </p>
+          </div>
+        </div>
+      </div>
 
       {/* Live Accounts Status & Quick Recover */}
       <Card>
         <CardHeader
           title="Account Health & Cooldown Overview"
-          subtitle="Real-time status of provider accounts and model cooldown allocations"
+          subtitle={`Real-time status of provider accounts (Live polling ${livePolling ? `every ${(autoRecoveryIntervalMs / 1000).toFixed(1)}s` : "paused"})`}
           icon={<Cpu size={18} className="text-accent" />}
           action={
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={recoverAllMutation.isPending}
-              onClick={() => handleRecoverAll()}
-              className="text-xs flex items-center gap-1.5"
-            >
-              <RotateCcw size={13} className={recoverAllMutation.isPending ? "animate-spin" : ""} />
-              Recover All
-            </Button>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-mono text-text-tertiary hidden sm:inline">
+                Synced: {lastRefreshedAt.toLocaleTimeString()}
+              </span>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={recoverAllMutation.isPending}
+                onClick={() => handleRecoverAll()}
+                className="text-xs flex items-center gap-1.5"
+              >
+                <RotateCcw size={13} className={recoverAllMutation.isPending ? "animate-spin" : ""} />
+                Recover All
+              </Button>
+            </div>
           }
         />
         <div className="divide-y divide-border-subtle">
@@ -508,6 +761,9 @@ export default function CoolingPage(): ReactNode {
                   providerName={provider.displayName}
                   onRecoverAccount={handleRecoverSingle}
                   isRecovering={recoverSingleMutation.isPending || recoverAllMutation.isPending}
+                  refetchInterval={pollingCadenceMs}
+                  codebuddyEndlessMode={codebuddyEndlessMode}
+                  autoRecoveryIntervalMs={autoRecoveryIntervalMs}
                 />
               </div>
             ))
@@ -527,6 +783,9 @@ export default function CoolingPage(): ReactNode {
           </p>
           <p>
             • <strong>Failure Interception:</strong> Instead of advancing accounts into <code>cooldown</code> status and assigning a hours-long <code>cooldownUntil</code> deadline, the failure recorder updates diagnostic messages while maintaining the account in <code>active</code> status.
+          </p>
+          <p>
+            • <strong>Dynamic 1-Second Sweep:</strong> The background scheduler checks and cleanses transient cooldowns and pools every 1 second (dynamically adjustable), invalidating the snapshot service immediately whenever an account returns to healthy rotation.
           </p>
           <p>
             • <strong>Automatic DNS Fallback:</strong> RIMURU includes embedded DNS resolution fallback to ensure connections to <code>www.codebuddy.ai</code> and <code>copilot.tencent.com</code> never get trapped by local sinkholes or network filters.

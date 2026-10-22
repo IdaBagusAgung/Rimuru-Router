@@ -73,6 +73,10 @@ export interface ConsoleApiCompositionDeps {
     | undefined;
   readonly resolvePeerAddress?: (request: Request) => string | null;
   readonly trustedProxyBoundary?: TrustedProxyBoundary;
+  readonly scheduledTasks?: {
+    updateInterval(name: string, intervalMs: number): boolean;
+    getInterval(name: string): number | undefined;
+  };
 }
 /**
  * Extracts a bearer API key from a console request, or `undefined`.
@@ -189,6 +193,7 @@ export function createConsoleRouter(deps: ConsoleApiCompositionDeps): Elysia {
     admissionService: deps.admissionService,
     ...(deps.modelStrikes ? { modelStrikes: deps.modelStrikes } : {}),
     readRoutingAccountInflight: deps.readRoutingAccountInflight,
+    scheduledTasks: deps.scheduledTasks,
     credentialService,
     // The backup surface re-authenticates the operator, so it needs the current
     // user's hash. Read from the session on the request that asks for it, never

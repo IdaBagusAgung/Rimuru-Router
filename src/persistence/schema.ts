@@ -920,6 +920,8 @@ export interface ConsoleSettingsPreferences {
   codebuddyEndlessMode?: boolean;
   /** When true, background auto-recovery periodically resets cooling accounts. Default true. */
   autoRecoveryEnabled?: boolean;
+  /** Auto-recovery background sweep interval in milliseconds. Default 1000 (1 second). */
+  autoRecoveryIntervalMs?: number;
 }
 
 export const consoleSettings = pgTable("console_settings", {

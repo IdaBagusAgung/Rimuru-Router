@@ -247,7 +247,10 @@ export function useDeleteProviderModel() {
  * lazy (cached render first, background revalidate), with account mutations
  * invalidating this key on write.
  */
-export function useProviderAccounts(providerId: string | undefined) {
+export function useProviderAccounts(
+  providerId: string | undefined,
+  options?: { refetchInterval?: number | false },
+) {
   return useQuery({
     queryKey: queryKeys.providers.accounts(providerId),
     queryFn: (context) =>
@@ -257,7 +260,8 @@ export function useProviderAccounts(providerId: string | undefined) {
       ),
     enabled: Boolean(providerId),
     ...DASHBOARD_QUERY_OPTIONS,
-    staleTime: 30_000,
+    staleTime: options?.refetchInterval ? 0 : 30_000,
+    ...(options?.refetchInterval !== undefined ? { refetchInterval: options.refetchInterval } : {}),
     gcTime: 600_000,
   });
 }

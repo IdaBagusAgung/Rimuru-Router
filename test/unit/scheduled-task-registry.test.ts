@@ -124,4 +124,14 @@ describe("ScheduledTaskRegistry late registration", () => {
     await registry.runNow("manual");
     expect(runs).toBe(1);
   });
+
+  test("updateInterval dynamically changes interval and getInterval returns it", async () => {
+    const registry = makeRegistry();
+    registry.register({ name: "dynamic", intervalMs: 50_000, run: () => {} });
+    expect(registry.getInterval("dynamic")).toBe(50_000);
+    const updated = registry.updateInterval("dynamic", 1_000);
+    expect(updated).toBe(true);
+    expect(registry.getInterval("dynamic")).toBe(1_000);
+    expect(registry.updateInterval("unknown", 500)).toBe(false);
+  });
 });

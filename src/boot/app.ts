@@ -589,6 +589,7 @@ export function createGatewayApp(deps: GatewayAppDeps) {
       app.use(
         createConsoleRouter({
           ...deps.consoleApi,
+          scheduledTasks: deps.scheduledTasks,
           stateStore: requestStateStore,
           resolvePeerAddress: (request) => peerAddresses.get(request) ?? null,
           trustedProxyBoundary: deps.trustedProxyBoundary,

@@ -98,6 +98,7 @@ function mapRuntimeSettingsRow(
     cooldownSystemEnabled: prefs.cooldownSystemEnabled !== false,
     codebuddyEndlessMode: prefs.codebuddyEndlessMode !== false,
     autoRecoveryEnabled: prefs.autoRecoveryEnabled !== false,
+    autoRecoveryIntervalMs: prefs.autoRecoveryIntervalMs ?? 1000,
     updatedAt,
   };
 }
@@ -139,6 +140,7 @@ export class DrizzleRuntimeSettingsStore implements RuntimeSettingsStore {
     if (patch.cooldownSystemEnabled !== undefined) patchPrefs.cooldownSystemEnabled = patch.cooldownSystemEnabled;
     if (patch.codebuddyEndlessMode !== undefined) patchPrefs.codebuddyEndlessMode = patch.codebuddyEndlessMode;
     if (patch.autoRecoveryEnabled !== undefined) patchPrefs.autoRecoveryEnabled = patch.autoRecoveryEnabled;
+    if (patch.autoRecoveryIntervalMs !== undefined) patchPrefs.autoRecoveryIntervalMs = patch.autoRecoveryIntervalMs;
 
     const rows = await this.db
       .insert(consoleSettings)

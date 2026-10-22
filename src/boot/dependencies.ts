@@ -381,8 +381,13 @@ export async function buildProductionDeps(): Promise<ProductionDeps> {
   }
   scheduledTasks.register({
     name: "account-health-sweep",
-    intervalMs: 5_000,
+    intervalMs: 1_000,
     run: async () => {
+      const prefs = await preferencesReaderFor(db).readPreferences("default").catch(() => null);
+      if (prefs?.autoRecoveryEnabled === false) return;
+      if (prefs?.autoRecoveryIntervalMs && scheduledTasks.getInterval("account-health-sweep") !== prefs.autoRecoveryIntervalMs) {
+        scheduledTasks.updateInterval("account-health-sweep", prefs.autoRecoveryIntervalMs);
+      }
       const recovered = await sweepExpiredCooldowns(db);
       const poolRecovered = await sweepExpiredPoolCooldowns(db);
       if (recovered > 0 || poolRecovered > 0) await snapshotService.invalidate();

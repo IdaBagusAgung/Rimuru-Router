@@ -32,6 +32,8 @@ export interface RuntimeSettingsResponse {
   readonly codebuddyEndlessMode: boolean;
   /** Auto-recovery background engine. Default true. */
   readonly autoRecoveryEnabled: boolean;
+  /** Auto-recovery background sweep interval in milliseconds. Default 1000. */
+  readonly autoRecoveryIntervalMs: number;
   readonly updatedAt: string;
 }
 
@@ -56,6 +58,7 @@ export interface RuntimeSettingsConfig {
   readonly store: RuntimeSettingsStore;
   readonly accessResolver: ConsoleAccessResolver;
   readonly auditSink?: AuditSink;
+  readonly onPreferencesUpdated?: (prefs: UpdateRuntimeSettingsRequest) => void | Promise<void>;
 }
 
 
@@ -126,7 +129,21 @@ export function createRuntimeSettingsOperations(deps: RuntimeSettingsConfig) {
         if (patch.rtkPruneLevel !== undefined && !RTK_LEVELS.includes(patch.rtkPruneLevel)) {
           throw new ConsoleDomainError("invalid_request", 400, "Invalid rtkPruneLevel");
         }
+        if (patch.autoRecoveryIntervalMs !== undefined) {
+          if (
+            !Number.isInteger(patch.autoRecoveryIntervalMs) ||
+            patch.autoRecoveryIntervalMs < 500 ||
+            patch.autoRecoveryIntervalMs > 3_600_000
+          ) {
+            throw new ConsoleDomainError(
+              "invalid_request",
+              400,
+              "autoRecoveryIntervalMs must be an integer between 500 and 3600000 ms",
+            );
+          }
+        }
         const updated = await deps.store.update(a.tenantId, patch);
+        await deps.onPreferencesUpdated?.(patch);
         await deps.auditSink?.record({
           access: a,
           action: "settings.runtime.updated",
@@ -159,4 +176,5 @@ export const runtimeUpdateBody = t.Object({
   cooldownSystemEnabled: t.Optional(t.Boolean()),
   codebuddyEndlessMode: t.Optional(t.Boolean()),
   autoRecoveryEnabled: t.Optional(t.Boolean()),
+  autoRecoveryIntervalMs: t.Optional(t.Integer({ minimum: 500, maximum: 3600000 })),
 });

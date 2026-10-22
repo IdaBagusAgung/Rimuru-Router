@@ -7,7 +7,7 @@ import { log } from "../observability/logger";
 
 export interface ScheduledTask {
   readonly name: string;
-  readonly intervalMs: number;
+  intervalMs: number;
   /** Delay before the first run after the registry starts. */
   readonly initialDelayMs?: number;
   run(): Promise<unknown> | void;
@@ -54,6 +54,7 @@ export const DEFAULT_INITIAL_BATCH_SIZE = 2;
 export class ScheduledTaskRegistry {
   private readonly tasks: ScheduledTask[] = [];
   private readonly timers: Timer[] = [];
+  private readonly intervalTimers = new Map<string, Timer>();
   /**
    * Latched by `start()` and cleared by `stop()`. This is the idempotency and
    * late-registration flag: unlike `timers.length`, it stays true when `start()`
@@ -104,6 +105,7 @@ export class ScheduledTaskRegistry {
     this.started = false;
     for (const timer of this.timers) clearInterval(timer);
     this.timers.length = 0;
+    this.intervalTimers.clear();
     if (this.inFlight.size > 0) {
       await Promise.allSettled([...this.inFlight]);
     }
@@ -117,6 +119,22 @@ export class ScheduledTaskRegistry {
   /** Whether a task is mid-run. A manual trigger uses this to answer 409. */
   isRunning(name: string): boolean {
     return this.running.has(name);
+  }
+
+  /** Dynamically updates a task's interval and reschedules it if running. */
+  updateInterval(name: string, intervalMs: number): boolean {
+    const task = this.tasks.find((t) => t.name === name);
+    if (!task) return false;
+    task.intervalMs = intervalMs;
+    if (this.started) {
+      this.scheduleInterval(task);
+    }
+    return true;
+  }
+
+  /** Returns the current interval in milliseconds for a registered task. */
+  getInterval(name: string): number | undefined {
+    return this.tasks.find((t) => t.name === name)?.intervalMs;
   }
 
   /** Runs one named task immediately, bypassing its interval — for tests and manual triggers. */
@@ -143,8 +161,15 @@ export class ScheduledTaskRegistry {
   }
 
   private scheduleInterval(task: ScheduledTask): void {
+    const existing = this.intervalTimers.get(task.name);
+    if (existing) {
+      clearInterval(existing);
+      const idx = this.timers.indexOf(existing);
+      if (idx !== -1) this.timers.splice(idx, 1);
+    }
     const timer = setInterval(() => void this.runOnce(task), task.intervalMs);
     if (typeof timer.unref === "function") timer.unref();
+    this.intervalTimers.set(task.name, timer);
     this.timers.push(timer);
   }
 

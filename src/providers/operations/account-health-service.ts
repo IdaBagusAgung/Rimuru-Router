@@ -1296,7 +1296,7 @@ export async function sweepExpiredCooldowns(db: CartethyiaDatabase): Promise<num
             lte(providerAccounts.cooldownUntil, now),
           ),
           // Auto-recovery mode for CodeBuddy accounts:
-          // Immediately recover CodeBuddy accounts in cooldown or disabled every 5s sweep
+          // Immediately recover CodeBuddy accounts in cooldown or disabled on every 1s sweep (dynamic)
           // with zero delay so there is no space for the model to stop waiting for recovery.
           and(
             inArray(providerAccounts.providerId, [...BUDDY_PROVIDER_IDS]),

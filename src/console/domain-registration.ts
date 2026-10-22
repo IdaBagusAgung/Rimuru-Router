@@ -98,6 +98,11 @@ export interface ConsoleDomainContext {
   readonly loadConsoleUser: (request: Request) => Promise<{ readonly passwordHash: string } | null>;
   /** Password verification against the console user's stored hash. */
   readonly credentialService: Pick<ConsoleCredentialService, "verifyPassword">;
+  /** Scheduler task manager for dynamic task interval updates. */
+  readonly scheduledTasks?: {
+    updateInterval(name: string, intervalMs: number): boolean;
+    getInterval(name: string): number | undefined;
+  };
 }
 import { and, eq, isNull, or } from "drizzle-orm";
 import { networkPools, providerRoutingSettings } from "../persistence/schema";
@@ -260,7 +265,18 @@ export function registerConsoleDomains(
     // same SSRF-validated fetch as every other egress.
     relayFetch: createValidatedFetch({ policy: resolveSsrfPolicy() }),
   }));
-  console.use(createRuntimeSettingsRoutes({ store: runtimeSettingsStore, accessResolver: ctx.accessResolver, auditSink: ctx.auditRecorder }));
+  console.use(
+    createRuntimeSettingsRoutes({
+      store: runtimeSettingsStore,
+      accessResolver: ctx.accessResolver,
+      auditSink: ctx.auditRecorder,
+      onPreferencesUpdated: (patch) => {
+        if (patch.autoRecoveryIntervalMs !== undefined && ctx.scheduledTasks) {
+          ctx.scheduledTasks.updateInterval("account-health-sweep", patch.autoRecoveryIntervalMs);
+        }
+      },
+    }),
+  );
   console.use(
     createBackupRoutes({
       accessResolver: ctx.accessResolver,
